@@ -43,3 +43,15 @@ variable "monthly_budget_usd" {
   type        = number
   default     = 5
 }
+
+variable "auto_delete_at" {
+  description = "Optional local time (YYYY-MM-DDThh:mm:ss) to automatically delete the EC2 instance, RDS database and Elastic IP. Empty = never."
+  type        = string
+  default     = ""
+}
+
+variable "auto_delete_timezone" {
+  description = "Time zone for auto_delete_at."
+  type        = string
+  default     = "America/Los_Angeles"
+}

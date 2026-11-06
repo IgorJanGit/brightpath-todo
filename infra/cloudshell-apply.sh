@@ -21,6 +21,8 @@ github_repo = "$REPO"
 alert_email = "$EMAIL"
 aws_region  = "${AWS_REGION:-us-east-2}"
 EOF
+# Optional self-destruct time, e.g. AUTO_DELETE_AT=2027-01-06T13:00:00
+if [ -n "${AUTO_DELETE_AT:-}" ]; then echo "auto_delete_at = \"$AUTO_DELETE_AT\"" >> terraform.tfvars; fi
 
 export TF_DATA_DIR=/tmp/tfdata
 terraform init -input=false

@@ -147,6 +147,8 @@ aws logs tail /todo/app --follow                          # app + caddy logs
 # on the box: journalctl -u todo-autodeploy -f            # deploy log
 ```
 
+**Self-destruct (cost safety net):** set `auto_delete_at` (e.g. `AUTO_DELETE_AT=2027-01-06T13:00:00` before running `cloudshell-apply.sh`). Terraform then creates one-time **EventBridge Scheduler** jobs that terminate the EC2 instance, delete the RDS database (no snapshot) and, an hour later, release the Elastic IP. Those are the only resources that cost money; whatever is left is free and goes away with `terraform destroy`. This demo is set to delete itself on **6 January 2027**.
+
 **Teardown:** `cd ~/<repo>/infra && TF_DATA_DIR=/tmp/tfdata terraform init && TF_DATA_DIR=/tmp/tfdata terraform destroy`.
 
 ## Repo layout
