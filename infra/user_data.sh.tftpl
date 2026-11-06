@@ -1,0 +1,36 @@
+#!/bin/bash
+# First-boot setup for the app server (Amazon Linux 2023).
+# It only prepares the box; the first real deploy comes from GitHub Actions.
+set -euxo pipefail
+
+# The instance boots without a public IP; Terraform attaches the Elastic IP a
+# few seconds later. Wait for internet access before downloading anything.
+for i in $(seq 1 60); do
+  curl -fsS --max-time 5 -o /dev/null https://github.com && break
+  sleep 5
+done
+
+dnf -y install docker git
+systemctl enable --now docker
+
+# Docker Compose v2 plugin (not packaged for AL2023).
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# 1 GiB swap: t3.micro has 1 GiB RAM; this avoids OOM kills during image pulls.
+if [ ! -f /swapfile ]; then
+  dd if=/dev/zero of=/swapfile bs=1M count=1024
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+# Public repo: compose file, Caddyfile and deploy script come from git.
+# (No secrets are in the repo; they are read from SSM at deploy time.)
+if [ ! -d /opt/todo/.git ]; then
+  git clone "https://github.com/${github_repo}.git" /opt/todo
+fi
+chmod 700 /opt/todo

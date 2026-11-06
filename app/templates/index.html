@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BrightPath To-Do</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="card">
+    <header>
+      <h1>BrightPath To-Do</h1>
+      <p class="sub">{{ remaining }} left · {{ todos|length }} total</p>
+    </header>
+
+    <form class="add" method="post" action="{{ url_for('add_todo') }}">
+      <input name="title" maxlength="200" placeholder="What needs doing?" autocomplete="off" autofocus required>
+      <button type="submit">Add</button>
+    </form>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+    {% if todos %}
+    <ul class="list">
+      {% for id, title, done, created_at in todos %}
+      <li class="{{ 'done' if done }}">
+        <form method="post" action="{{ url_for('toggle_todo', todo_id=id) }}">
+          <button class="check" type="submit" aria-label="{{ 'Mark as not done' if done else 'Mark as done' }}">{{ '✓' if done else '' }}</button>
+        </form>
+        <span class="title">{{ title }}</span>
+        <time datetime="{{ created_at.isoformat() }}">{{ created_at.strftime('%b %d, %H:%M') }} UTC</time>
+        <form method="post" action="{{ url_for('delete_todo', todo_id=id) }}">
+          <button class="delete" type="submit" aria-label="Delete">×</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">Nothing here yet. Add your first task above.</p>
+    {% endif %}
+  </main>
+
+  <footer>
+    version <code>{{ version }}</code> · instance <code>{{ instance }}</code> · <a href="{{ url_for('health') }}">/health</a>
+  </footer>
+</body>
+</html>

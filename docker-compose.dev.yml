@@ -1,0 +1,29 @@
+# Local development: `docker compose -f docker-compose.dev.yml up --build`
+# then open http://localhost:8000. Uses a throwaway local Postgres.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: todo
+      POSTGRES_PASSWORD: localdev   # local-only, never used on AWS
+      POSTGRES_DB: todo
+    ports:
+      - "5432:5432"   # so tests can run from the host
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U todo"]
+      interval: 3s
+      retries: 10
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: db
+      DB_USER: todo
+      DB_PASSWORD: localdev
+      DB_NAME: todo
+      DB_SSLMODE: disable
+    depends_on:
+      db:
+        condition: service_healthy

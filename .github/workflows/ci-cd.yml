@@ -1,0 +1,117 @@
+name: CI/CD
+
+# Every push to main: test -> build image -> push to ECR -> deploy via SSM -> smoke test.
+# Pull requests only run the tests.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never run two deploys at once; queue them instead.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: todo
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: todo
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U todo"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://todo:ci-only-password@localhost:5432/todo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: app/requirements*.txt
+      - run: pip install -r app/requirements-dev.txt
+      - run: pytest -v app/tests
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # lets GitHub mint an OIDC token that AWS trades for short-lived creds
+      contents: read
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REPOSITORY_URL: ${{ vars.ECR_REPOSITORY_URL }}
+      INSTANCE_ID: ${{ vars.INSTANCE_ID }}
+      APP_URL: ${{ vars.APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        run: |
+          IMAGE="$ECR_REPOSITORY_URL:$GITHUB_SHA"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Deploy to EC2 via SSM Run Command
+        run: |
+          jq -n --arg sha "$GITHUB_SHA" '{commands: [
+            "set -euo pipefail",
+            "cd /opt/todo",
+            "git fetch --quiet origin main",
+            "git checkout --quiet --force \($sha)",
+            "bash deploy/deploy.sh \($sha)"
+          ]}' > params.json
+
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${GITHUB_SHA::7}" \
+            --parameters file://params.json \
+            --query Command.CommandId --output text)
+          echo "SSM command: $CMD_ID"
+
+          # Poll for up to 5 minutes.
+          for i in $(seq 1 60); do
+            sleep 5
+            STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" \
+              --instance-id "$INSTANCE_ID" --query Status --output text 2>/dev/null || echo Pending)
+            case "$STATUS" in Pending|InProgress|Delayed) continue ;; *) break ;; esac
+          done
+
+          echo "---- output from the instance ----"
+          aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --query '[StandardOutputContent, StandardErrorContent]' --output text
+          echo "Status: $STATUS"
+          test "$STATUS" = "Success"
+
+      - name: Smoke test the public URL
+        run: |
+          for i in $(seq 1 12); do
+            if BODY=$(curl -fsS --max-time 10 "$APP_URL/health"); then
+              echo "$BODY"
+              echo "$BODY" | jq -e --arg v "${GITHUB_SHA::7}" '.status == "ok" and .version == $v' && exit 0
+            fi
+            sleep 5
+          done
+          echo "Health check did not report the new version as healthy" >&2
+          exit 1

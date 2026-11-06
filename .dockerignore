@@ -1,0 +1,12 @@
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+app/tests
+.git
+.github
+infra
+docs
+deploy
+*.md
+.env
+*.env

@@ -1,0 +1,18 @@
+name: Uptime check
+
+# An outside-in check of /health every 30 minutes. If it fails, GitHub emails
+# the repo owner. Complements the CloudWatch alarms, which only see AWS metrics.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    if: vars.APP_URL != ''
+    steps:
+      - name: GET /health
+        run: curl -fsS --max-time 10 --retry 3 --retry-delay 20 --retry-all-errors "${{ vars.APP_URL }}/health"

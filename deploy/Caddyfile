@@ -1,0 +1,14 @@
+# SITE_ADDRESS is "<elastic-ip-with-dashes>.sslip.io" (automatic HTTPS from
+# Let's Encrypt) or ":80" (plain HTTP). Terraform decides; deploy.sh passes it.
+{$SITE_ADDRESS} {
+	encode gzip
+	reverse_proxy app:8000
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}

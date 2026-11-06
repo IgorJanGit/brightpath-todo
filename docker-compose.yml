@@ -1,0 +1,41 @@
+# Production stack, run on the EC2 instance by deploy/deploy.sh.
+# IMAGE, SITE_ADDRESS, AWS_REGION and LOG_GROUP are exported by deploy.sh;
+# database credentials arrive in app.env (written from SSM, mode 600).
+services:
+  app:
+    image: ${IMAGE:?IMAGE must be set}
+    env_file: app.env
+    restart: unless-stopped
+    expose:
+      - "8000"            # only reachable by Caddy on the Docker network
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION}
+        awslogs-group: ${LOG_GROUP}
+        awslogs-stream: app
+
+  caddy:
+    image: caddy:2.8.4-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data     # keeps the Let's Encrypt certificate across restarts
+      - caddy_config:/config
+    depends_on:
+      - app
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION}
+        awslogs-group: ${LOG_GROUP}
+        awslogs-stream: caddy
+
+volumes:
+  caddy_data:
+  caddy_config:
