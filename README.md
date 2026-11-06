@@ -1,11 +1,11 @@
 # BrightPath To-Do: a small app, deployed properly on AWS
 
-A to-do list (Flask + PostgreSQL) running on a Linux EC2 instance, with the database on Amazon RDS. The app is intentionally tiny; the point of the repo is **how it is deployed and run**: infrastructure as code, keyless CI/CD, HTTPS, least-privilege networking, monitoring and a hard look at cost.
+A to-do list (Flask + PostgreSQL) running on a Linux EC2 instance, with the database on Amazon RDS. The app is intentionally tiny; the point of the repo is **how it is deployed and run**: infrastructure as code, pull-based CI/CD with no AWS keys outside AWS, HTTPS, least-privilege networking, monitoring and a hard look at cost.
 
 | | |
 |---|---|
-| **Live app** | `https://<elastic-ip-with-dashes>.sslip.io` ← *replace with the `app_url` Terraform prints* |
-| **Health check** | `<live app>/health` |
+| **Live app** | https://3-131-76-41.sslip.io |
+| **Health check** | https://3-131-76-41.sslip.io/health |
 | **Demo video** | *link* |
 
 ---
@@ -46,15 +46,16 @@ It returns **200** when healthy and **503** when the database is unreachable (`"
 
 ![Deploy flow](docs/deploy-flow.png)
 
-On every push to `main`, GitHub Actions:
+On every push to `main`:
 
-1. runs the tests against a real Postgres service container
-2. builds the Docker image
-3. pushes it to **ECR**, tagged with the git SHA (tags are immutable)
-4. calls **SSM Run Command** on the instance. `deploy/deploy.sh` checks out that SHA, reads config from **SSM Parameter Store**, pulls the image, runs `docker compose up --wait` (which waits for the container health check) and **rolls back** to the previous image if the new one never becomes healthy
-5. smoke-tests the public `/health` and checks that it reports the *new* version
+1. **GitHub Actions** runs the tests against a real Postgres service container (job `test`) and builds the Docker image.
+2. On the server, a **systemd timer** runs [`deploy/poll.sh`](deploy/poll.sh) every minute. It `git fetch`es `main`, and when there is a new commit **whose `test` check passed**, it checks it out and runs [`deploy/deploy.sh`](deploy/deploy.sh).
+3. `deploy.sh` reads config and the DB password from **SSM Parameter Store**, builds the image for that commit, and runs `docker compose up --wait`, which waits for the container's `/health` check. If the new version never becomes healthy, it **rolls back** to the previous image and marks the commit as bad so it isn't retried.
+4. Back in GitHub Actions, the `verify-deploy` job polls the public `/health` until it reports the *new* commit, so the pipeline goes red if the deploy didn't land.
 
-AWS access comes from **GitHub OIDC**: the workflow gets 1-hour credentials for a role that only trusts `main` of this repo. There are no AWS keys in GitHub and no SSH keys anywhere.
+**Finding out when something breaks:** CloudWatch alarms (EC2 status checks with automatic recovery, CPU credits, RDS CPU and free storage) and the AWS Budget email through SNS; container logs go to CloudWatch Logs (`/todo/app`); and a GitHub Actions uptime check hits `/health` from outside every 30 minutes.
+
+No AWS credentials exist outside AWS: the instance uses its IAM role, and GitHub has nothing it could leak. (This design came out of a real problem; see [What went wrong](#what-went-wrong-while-building-and-how-i-found-the-cause).)
 
 Diagram sources: [`docs/architecture.mmd`](docs/architecture.mmd), [`docs/deploy-flow.mmd`](docs/deploy-flow.mmd) (Mermaid).
 
@@ -68,15 +69,15 @@ Diagram sources: [`docs/architecture.mmd`](docs/architecture.mmd), [`docs/deploy
 | **Linux distro** | Amazon Linux 2023 | Ubuntu 24.04 | AL2023 ships with the SSM agent and AWS CLI, is tuned for EC2 and is supported by AWS. Ubuntu would work just as well; AL2023 meant less bootstrap code. |
 | **Database** | RDS PostgreSQL 16 `db.t3.micro` | Postgres in a container on the same EC2; DynamoDB | Managed backups, patching, encryption and a private endpoint. Running Postgres on the same 1 GB box would tie the data to the server's lifecycle and compete for RAM. DynamoDB is always-free, but relational SQL is closer to a typical SaaS backend and easier to reason about. |
 | **Traffic in** | Elastic IP → Caddy on the instance | Application Load Balancer + ACM; CloudFront | With one instance an ALB adds cost on new accounts and needs a real domain for ACM. Caddy gives automatic HTTPS for $0. The ALB is the first thing I'd add for real customers (below). |
-| **Packaging** | Docker + Compose | systemd + virtualenv | The same image runs in CI, locally and in prod, and rollback is just "run the previous tag". |
-| **Deploy** | GitHub Actions → ECR → SSM Run Command | SSH from CI with a stored key; CodeDeploy | No inbound port 22, no long-lived secrets, and the output is audited in SSM. CodeDeploy would also work but needs more moving parts for a single host. |
+| **Packaging** | Docker + Compose | systemd + virtualenv | The same Dockerfile runs in CI, locally and in prod, and rollback is just "run the previous image". |
+| **Deploy** | Pull-based: GitHub Actions tests, the server pulls and deploys | Push from Actions via OIDC → ECR → SSM (my first design, blocked by the account's SCP); IAM user access keys in GitHub; SSH from CI | No inbound port 22 and no AWS credentials in GitHub. Long-lived access keys would have worked around the SCP, but they're exactly the kind of secret the brief says not to spread around. Trade-off: up to ~1 minute of deploy latency, and the server builds the image itself (fine for a small app). |
 | **Secrets** | SSM Parameter Store (SecureString) | Secrets Manager | Parameter Store standard tier is free; Secrets Manager costs $0.40/secret/month. I'd switch for automatic rotation. |
 | **IaC** | Terraform | CloudFormation; clicking in the console | Everything is reviewable, repeatable and removable with `terraform destroy`. |
 
 ### Nice-to-haves I picked, and why
 
 - **Terraform (IaC)**: the whole environment is about 40 resources. Writing it down means I can rebuild it from scratch, reviewers can see every security group rule, and teardown is guaranteed (no forgotten resources = no surprise bill).
-- **CI/CD with GitHub Actions**: deploying should be boring and identical every time. Every push is tested, and a broken build can never reach the server because the deploy waits for the health check and rolls back.
+- **CI/CD (GitHub Actions + pull-based deploy)**: deploying should be boring and identical every time. Every push is tested; the server only deploys commits whose tests passed; a broken release can't stay live because the deploy waits for the health check and rolls back; and the pipeline itself confirms the new version is live.
 - *Small extras because they were nearly free:* **HTTPS** (Caddy + sslip.io) and **basic monitoring** (CloudWatch alarms + SNS email, an AWS Budget, container logs in CloudWatch, and an outside-in uptime check of `/health` from GitHub every 30 minutes).
 
 ---
@@ -86,7 +87,7 @@ Diagram sources: [`docs/architecture.mmd`](docs/architecture.mmd), [`docs/deploy
 - **No secrets in the repo.** The DB password is generated by Terraform, stored as an SSM SecureString, and written on the server to a root-only (`600`) env file at deploy time. `*.tfstate`, `*.tfvars` and env files are git-ignored.
 - **Only the ports the app needs.** Internet → EC2: 80 and 443. EC2 → RDS: 5432, from the web security group only. **No SSH** (no key pair, no port 22); shell access goes through SSM Session Manager, which is IAM-authenticated and logged.
 - **Database is private.** It sits in subnets with no internet route, `publicly_accessible = false`, storage is encrypted, and connections use TLS (`sslmode=require`; RDS enforces `rds.force_ssl`).
-- **Least-privilege IAM.** The instance role can read only `/todo/*` parameters, pull only this ECR repo and write only to its log group. The GitHub role can push only to this repo and run commands only on this instance, and only from `main`.
+- **Least-privilege IAM.** The instance role can read only `/todo/*` parameters (plus SSM agent basics) and write only to its own log group. GitHub has no AWS access at all.
 - **Hardened instance.** IMDSv2 required (hop limit 1, so containers can't reach instance credentials) and an encrypted EBS root volume.
 - **App level.** Parameterised SQL, auto-escaped templates (covered by a test), input length limits, a non-root container, security headers from Caddy, and health output that never leaks connection strings.
 
@@ -98,13 +99,12 @@ Diagram sources: [`docs/architecture.mmd`](docs/architecture.mmd), [`docs/deploy
 | EBS 16 GB gp3 | 30 GB | |
 | RDS `db.t3.micro`, 20 GB gp2, single-AZ | 750 h + 20 GB | Backup retention 1 day; storage autoscaling off |
 | Public IPv4 (Elastic IP) | 750 h/month on legacy Free Tier; covered by credits on new accounts | About $3.60/month at list price, the one item to watch |
-| ECR | 500 MB | Lifecycle policy keeps only the last 5 images |
 | SSM Parameter Store (standard), Run Command, Session Manager | Free | |
 | CloudWatch | 10 alarms, 5 GB logs | 5 alarms; logs kept 7 days |
 | SNS email, AWS Budgets | Free (first 2 budgets) | |
 | **Deliberately avoided** | | NAT Gateway (about $32/month), ALB, Multi-AZ RDS, Secrets Manager, Performance Insights, interface VPC endpoints |
 
-Guardrails: an **AWS Budget** ($5/month) emails at 20% of actual spend and at 100% forecast. Credits are *excluded*, so it reflects real usage even when sign-up credits would hide it. `terraform destroy` removes everything, including the ECR images and the database (no final snapshot).
+Guardrails: an **AWS Budget** ($5/month) emails at 20% of actual spend and at 100% forecast. Credits are *excluded*, so it reflects real usage even when sign-up credits would hide it. `terraform destroy` removes everything, including the database (no final snapshot).
 
 ---
 
@@ -126,29 +126,28 @@ TEST_DATABASE_URL=postgresql://todo:localdev@localhost:5432/todo pytest -v app/t
 
 ## Deploy it to AWS
 
-**Prerequisites:** an AWS account, the AWS CLI logged in locally with an admin profile (`aws configure` / `aws sso login`; credentials stay on your machine), Terraform ≥ 1.6, and this repo pushed to GitHub as a **public** repo (the server clones it on first boot).
+**Prerequisites:** an AWS account and this repo on GitHub as a **public** repo (the server clones it). No local AWS keys are needed: provisioning runs in **AWS CloudShell**, which uses your console login.
 
-```bash
-# 1. Provision (about 10 minutes, mostly RDS)
-cd infra
-cp terraform.tfvars.example terraform.tfvars   # set github_repo and alert_email
-terraform init
-terraform apply
-```
-
+1. Open CloudShell in the console (I used `us-east-2`; new Free plan accounts are limited to one region) and run:
+   ```bash
+   bash <(curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/infra/cloudshell-apply.sh) <owner>/<repo> <alert-email>
+   ```
+   It installs Terraform, clones the repo, writes `terraform.tfvars` and runs `terraform apply` (about 10 minutes, mostly RDS). State stays in your CloudShell home directory.
 2. **Confirm the SNS subscription** email AWS sends you, so alarms reach you.
-3. In GitHub → *Settings → Secrets and variables → Actions → **Variables***, add the five values from `terraform output github_variables`: `AWS_REGION`, `AWS_ROLE_ARN`, `ECR_REPOSITORY_URL`, `INSTANCE_ID`, `APP_URL`. These are identifiers, not secrets.
-4. Deploy: push to `main`, or *Actions → CI/CD → Run workflow*.
-5. Open `terraform output app_url`. The first HTTPS request can take a few seconds while Caddy obtains the certificate.
+3. In GitHub → *Settings → Secrets and variables → Actions → Variables*, add `APP_URL` = `terraform output app_url` (used by `verify-deploy` and the uptime check).
+4. That's it. On first boot the instance installs the deploy timer and deploys the latest passing commit. After that, every push to `main` goes live within about a minute of its tests passing.
 
-Useful commands:
+Prefer running Terraform locally? `cd infra && cp terraform.tfvars.example terraform.tfvars && terraform init && terraform apply` with any admin AWS profile.
+
+Useful commands (CloudShell):
 
 ```bash
-terraform output shell_command        # shell on the box via SSM, no SSH
-aws logs tail /todo/app --follow      # app + caddy logs
+aws ssm start-session --target <instance-id>              # shell on the box, no SSH
+aws logs tail /todo/app --follow                          # app + caddy logs
+# on the box: journalctl -u todo-autodeploy -f            # deploy log
 ```
 
-**Teardown:** `cd infra && terraform destroy`.
+**Teardown:** `cd ~/<repo>/infra && TF_DATA_DIR=/tmp/tfdata terraform init && TF_DATA_DIR=/tmp/tfdata terraform destroy`.
 
 ## Repo layout
 
@@ -157,16 +156,31 @@ app/                 Flask app, templates, tests
 Dockerfile           non-root image with a /health HEALTHCHECK
 docker-compose.yml   prod stack on EC2: app + Caddy, logs to CloudWatch
 docker-compose.dev.yml  local stack: app + throwaway Postgres
-deploy/deploy.sh     runs on the instance via SSM: config → pull → up --wait → rollback
+deploy/poll.sh       on the instance, every minute: new commit on main + CI passed? → deploy
+deploy/deploy.sh     config from SSM → docker build → up --wait → rollback if unhealthy
+deploy/systemd/      the timer + service that run poll.sh
 deploy/Caddyfile     HTTPS reverse proxy + security headers
-infra/               Terraform: VPC, SGs, EC2, RDS, IAM/OIDC, ECR, SSM, alarms, budget
-.github/workflows/   ci-cd.yml (test/build/deploy/smoke test), uptime.yml
+infra/               Terraform: VPC, SGs, EC2, RDS, IAM, SSM, alarms, budget (+ cloudshell-apply.sh)
+.github/workflows/   ci-cd.yml (test → build → verify-deploy), uptime.yml
 docs/                architecture diagrams (Mermaid sources + PNG)
 ```
 
 ## What went wrong while building, and how I found the cause
 
-> *Fill in with what actually happened when you deployed. See `docs/demo-script.md` for how to tell it. Structure: symptom → what I checked → real cause → fix → what I'd do to catch it earlier.*
+**Symptom.** My first `terraform apply` created about 40 resources, then failed on one:
+
+```
+Error: creating IAM OIDC Provider: ... AccessDenied: ... is not authorized to perform:
+iam:CreateOpenIDConnectProvider ... with an explicit deny in a service control policy
+```
+
+**What I checked.** I was signed in with full admin access, so this wasn't a missing IAM permission on my role. The key words were *"explicit deny in a service control policy"*. An SCP sits above IAM at the AWS Organizations level, and an explicit deny there beats any Allow. A brand-new account shouldn't have one, so I looked at how the account was set up: new accounts on AWS's **Free plan** (created after July 2025) run inside an AWS-managed organization. It restricts some actions and also limits you to one region, which is why CloudShell refused `us-west-2` earlier and I moved to `us-east-2`.
+
+**Real cause.** The Free plan's SCP blocks creating an IAM OIDC identity provider, which is exactly what GitHub Actions needs to get short-lived AWS credentials. So my push-based pipeline (Actions → ECR → SSM Run Command) could never authenticate to AWS in this account, however I wrote the IAM policies.
+
+**Fix.** I had three options: upgrade the account to the paid plan, create an IAM user and put long-lived access keys in GitHub, or **flip the direction of deployment**. I chose the third. The instance already has an IAM role, so it pulls from GitHub, only deploys commits whose tests passed, and keeps the health-check rollback. GitHub never holds AWS credentials, which is a better security posture than the keys workaround. I removed ECR and the GitHub role from Terraform, and the second `apply` converged cleanly.
+
+**What I'd do to catch it earlier.** Check the account's guardrails first (`aws organizations describe-organization`, the Free plan's supported-services list) before designing around a feature, and apply the identity and access pieces (`-target`) before the slow resources like RDS, so a blocker shows up in seconds instead of after an 8-minute database build.
 
 ## What I'd change before real customers used it
 

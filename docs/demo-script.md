@@ -24,7 +24,7 @@ Then one sentence per choice, each with the alternative:
 - **RDS Postgres:** managed backups, patching, encryption, private endpoint. *Considered Postgres in a container on the same box: cheaper, but data tied to one 1 GB server.*
 - **Traffic:** Elastic IP + Caddy for free HTTPS. *Considered an ALB with ACM, which is what I'd do with real traffic, but for one instance it adds cost and needs a domain.*
 
-Flip to `docs/deploy-flow.png` (≈ 20 s): push → tests → image to ECR → SSM Run Command → `compose up --wait` with automatic rollback → smoke test on `/health`. "No SSH and no AWS keys in GitHub; it uses OIDC."
+Flip to `docs/deploy-flow.png` (≈ 25 s): "Every push runs the tests in GitHub Actions. The server checks GitHub every minute, and when there's a new commit whose tests passed, it builds it, waits for the health check, and rolls back if it fails. Then Actions confirms the live `/health` shows the new commit. GitHub never holds any AWS credentials." *Considered: pushing from Actions with OIDC, which was my original design (see section 4).*
 
 ## 3. Security and cost (≈ 45 s)
 
@@ -36,18 +36,15 @@ Show the EC2 security group (80/443 only) and the RDS SG (5432 from the web SG o
 
 ## 4. Something that went wrong (≈ 40 s)
 
-**Use your own real incident.** Structure: *symptom → what I checked → actual cause → fix → how I'd catch it sooner.* Reviewers specifically want to hear that you found the root cause rather than working around it.
+This really happened while building it (full write-up in the README):
 
-Things that commonly bite on this exact setup, so you'll recognise them if they happen (only talk about one if it actually happened to you):
+- **Symptom:** the first `terraform apply` built about 40 resources, then failed on one: `AccessDenied ... iam:CreateOpenIDConnectProvider ... with an explicit deny in a service control policy`.
+- **Digging in:** "I was an admin, so it wasn't my IAM permissions. 'Explicit deny in a *service control policy*' means AWS Organizations. New Free plan accounts run inside an AWS-managed organization with guardrails. That's also why CloudShell had refused my original region, us-west-2."
+- **Root cause:** the Free plan blocks creating the OIDC identity provider that GitHub Actions needs to get AWS credentials, so my push-based pipeline could never authenticate, however I wrote the policies.
+- **Fix, not a workaround:** "I could have put long-lived IAM keys in GitHub, but that's the thing I was trying to avoid. So I flipped the direction: the server, which already has an IAM role, pulls from GitHub, and only deploys commits whose tests passed."
+- **Lesson:** check account guardrails first, and apply the identity pieces before slow resources like RDS, so a blocker shows up in seconds, not after an 8-minute database build.
 
-| Symptom | Where to look | Typical root cause |
-|---|---|---|
-| `/health` → 503, `database.error: "PoolTimeout"` | `aws logs tail /todo/app` | DB SG not referencing the web SG, wrong host in SSM, or `sslmode` mismatch (RDS PG 16 forces TLS) |
-| Site loads on `http://IP` but HTTPS fails | Caddy logs in the `/todo/app` log group | Port 80 blocked (Let's Encrypt HTTP-01 challenge needs it) or rate limits |
-| Deploy step: `AccessDenied` on `AssumeRoleWithWebIdentity` | Actions log | `github_repo` case/typo doesn't match the OIDC `sub` claim, or the workflow isn't running on `main` |
-| SSM command stuck in `Pending` / instance not in Fleet Manager | Systems Manager → Fleet Manager | Instance had no internet yet (EIP not attached) or the role lacked `AmazonSSMManagedInstanceCore` |
-| `terraform apply`: `FreeTierRestrictionError` on RDS | Terraform output | Backup retention > 1 day on a Free Tier account |
-| Deploy rolled back | SSM command output shows the last app logs | New image failing its health check (that's the safety net working) |
+Optional extra to show live: a deploy rolling back. Push a commit that breaks `/health`, show the server keeping the old version, then revert.
 
 ## 5. Before real customers (≈ 30 s)
 

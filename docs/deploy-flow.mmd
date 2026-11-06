@@ -1,43 +1,25 @@
-%% Deploy and operations path: how code gets onto the server, and how we find out when something breaks.
-flowchart LR
-    dev(["git push to main"])
+%% Pull-based deploy: no AWS credentials ever leave AWS.
+sequenceDiagram
+    autonumber
+    actor Dev as Developer
+    participant GH as GitHub repo + Actions
+    participant EC2 as EC2 · poll.sh (systemd timer, every 60 s)
+    participant SSM as SSM Parameter Store
+    participant App as Docker: app + Caddy
+    participant User as Live site /health
 
-    subgraph gh["GitHub Actions"]
-        test["1 · pytest against<br/>Postgres service container"]
-        build["2 · docker build"]
-        smoke["5 · smoke test<br/>GET /health shows new version"]
+    Dev->>GH: git push to main
+    GH->>GH: job "test": pytest vs Postgres<br/>job "build": docker build
+    loop every 60 seconds
+        EC2->>GH: git fetch main: new commit?
+        EC2->>GH: Checks API: did "test" pass for it?
     end
-
-    subgraph aws["AWS"]
-        oidc["IAM role (GitHub OIDC)<br/>short-lived creds, main branch only"]
-        ecr["ECR<br/>image tagged with git SHA"]
-        runcmd["SSM Run Command"]
-        subgraph ec2["EC2 app server"]
-            deploy["deploy.sh<br/>git checkout SHA · pull image<br/>compose up --wait · rollback on failure"]
-        end
-        params["SSM Parameter Store<br/>DB host/user · password (SecureString)"]
-        logs["CloudWatch Logs<br/>app + caddy containers"]
-        alarms["CloudWatch alarms<br/>EC2 status (auto-recover) · CPU credits<br/>RDS CPU · RDS free storage"]
-        budget["AWS Budget<br/>$5/month, credits excluded"]
-        sns["SNS email alerts"]
+    GH-->>EC2: yes, new commit, tests passed
+    EC2->>SSM: read DB host/user/password (instance IAM role)
+    EC2->>App: docker build + compose up --wait
+    App-->>EC2: container /health healthy (DB reachable)
+    alt new version never healthy
+        EC2->>App: roll back to previous image, mark commit bad
     end
-
-    dev --> test --> build
-    build -- "assume role" --> oidc
-    build -- "3 · docker push" --> ecr
-    build -- "4 · send-command" --> runcmd --> deploy
-    deploy -- "read config" --> params
-    deploy -- "pull image" --> ecr
-    deploy --> smoke
-    deploy -- "container logs" --> logs
-    alarms --> sns
-    budget --> sns
-
-    classDef box fill:#ffffff,stroke:#7a96ad,color:#1f2a2e
-    classDef hot fill:#ffe8d6,stroke:#e8792b,color:#1f2a2e,stroke-width:2px
-    classDef zone fill:#f6f9fb,stroke:#9fb3c4,color:#1f2a2e
-    classDef cloud fill:#fffaf4,stroke:#e8792b,color:#1f2a2e
-    class aws cloud
-    class gh,ec2 zone
-    class test,build,smoke,oidc,ecr,runcmd,params,logs,alarms,budget,sns,dev box
-    class deploy hot
+    GH->>User: job "verify-deploy": poll /health
+    User-->>GH: version == pushed commit → pipeline green
