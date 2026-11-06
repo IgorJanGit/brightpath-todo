@@ -28,7 +28,7 @@ resource "aws_vpc_security_group_ingress_rule" "web_https" {
   to_port           = 443
 }
 
-# Outbound: pull images from ECR, talk to SSM/CloudWatch APIs, reach RDS,
+# Outbound: git fetch from GitHub, pull base images, talk to SSM/CloudWatch APIs, reach RDS,
 # fetch OS updates and Let's Encrypt. (Tightening this needs VPC endpoints,
 # which cost money; see README "What I'd change".)
 resource "aws_vpc_security_group_egress_rule" "web_all" {

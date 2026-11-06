@@ -1,4 +1,4 @@
-# Small, non-root image for the Flask app. Built in GitHub Actions, pushed to ECR.
+# Small, non-root image for the Flask app. CI builds it as a check; the EC2 instance builds the same Dockerfile when it deploys.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
