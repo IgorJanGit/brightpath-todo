@@ -3,7 +3,7 @@ flowchart LR
     user(["User's browser"])
     dns["sslip.io public DNS<br/>&lt;ip-with-dashes&gt;.sslip.io<br/>resolves to the Elastic IP"]
 
-    subgraph aws["AWS · us-west-2"]
+    subgraph aws["AWS · us-east-2"]
         subgraph vpc["VPC 10.0.0.0/16"]
             igw["Internet<br/>Gateway"]
             subgraph pub["Public subnet · SG web: inbound 80 + 443 only, no SSH"]
