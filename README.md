@@ -57,7 +57,7 @@ On every push to `main`:
 
 No AWS credentials exist outside AWS: the instance uses its IAM role, and GitHub has nothing it could leak. (This design came out of a real problem; see [What went wrong](#what-went-wrong-while-building-and-how-i-found-the-cause).)
 
-Diagram sources: [`docs/architecture.mmd`](docs/architecture.mmd), [`docs/deploy-flow.mmd`](docs/deploy-flow.mmd) (Mermaid).
+Diagram sources: [`docs/architecture.drawio`](docs/architecture.drawio) (draw.io; open at [app.diagrams.net](https://app.diagrams.net)) and [`docs/deploy-flow.mmd`](docs/deploy-flow.mmd) (Mermaid).
 
 ---
 
