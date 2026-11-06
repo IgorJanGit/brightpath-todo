@@ -15,14 +15,6 @@ output "instance_id" {
   value = aws_instance.app.id
 }
 
-output "ecr_repository_url" {
-  value = aws_ecr_repository.app.repository_url
-}
-
-output "github_deploy_role_arn" {
-  value = aws_iam_role.github_deploy.arn
-}
-
 output "rds_endpoint" {
   description = "Private endpoint; only reachable from inside the VPC."
   value       = aws_db_instance.main.address
@@ -34,12 +26,8 @@ output "shell_command" {
 }
 
 output "github_variables" {
-  description = "Paste these into GitHub -> Settings -> Secrets and variables -> Actions -> Variables."
+  description = "Paste into GitHub -> Settings -> Secrets and variables -> Actions -> Variables."
   value = {
-    AWS_REGION         = var.aws_region
-    AWS_ROLE_ARN       = aws_iam_role.github_deploy.arn
-    ECR_REPOSITORY_URL = aws_ecr_repository.app.repository_url
-    INSTANCE_ID        = aws_instance.app.id
-    APP_URL            = local.app_url
+    APP_URL = local.app_url
   }
 }

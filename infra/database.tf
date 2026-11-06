@@ -45,13 +45,12 @@ resource "aws_db_instance" "main" {
 # The password is a SecureString (encrypted with the AWS-managed KMS key, free).
 locals {
   plain_params = {
-    "db/host"            = aws_db_instance.main.address
-    "db/port"            = tostring(aws_db_instance.main.port)
-    "db/name"            = aws_db_instance.main.db_name
-    "db/user"            = aws_db_instance.main.username
-    "site_address"       = local.site_address
-    "ecr_repository_url" = aws_ecr_repository.app.repository_url
-    "log_group"          = aws_cloudwatch_log_group.app.name
+    "db/host"      = aws_db_instance.main.address
+    "db/port"      = tostring(aws_db_instance.main.port)
+    "db/name"      = aws_db_instance.main.db_name
+    "db/user"      = aws_db_instance.main.username
+    "site_address" = local.site_address
+    "log_group"    = aws_cloudwatch_log_group.app.name
   }
 }
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Deploy the latest CI-passing commit of the to-do app
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /opt/todo/deploy/poll.sh
+TimeoutStartSec=600

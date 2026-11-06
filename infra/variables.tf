@@ -11,7 +11,7 @@ variable "project" {
 }
 
 variable "github_repo" {
-  description = "GitHub repository allowed to deploy, as \"owner/name\" (case-sensitive, must match GitHub exactly)."
+  description = "Public GitHub repository the server clones and deploys from, as \"owner/name\"."
   type        = string
 }
 
@@ -42,10 +42,4 @@ variable "monthly_budget_usd" {
   description = "Monthly AWS Budget; emails at 20% actual and 100% forecasted."
   type        = number
   default     = 5
-}
-
-variable "create_github_oidc_provider" {
-  description = "Set false if the account already has the token.actions.githubusercontent.com OIDC provider."
-  type        = bool
-  default     = true
 }

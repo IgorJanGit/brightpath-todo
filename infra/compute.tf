@@ -56,33 +56,6 @@ resource "aws_eip_association" "app" {
   allocation_id = aws_eip.app.id
 }
 
-# Private container registry for the app image (CI pushes, EC2 pulls).
-resource "aws_ecr_repository" "app" {
-  name                 = var.project
-  image_tag_mutability = "IMMUTABLE" # tags are git SHAs; never overwritten
-  force_delete         = true        # so `terraform destroy` cleans up fully
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_lifecycle_policy" "app" {
-  repository = aws_ecr_repository.app.name
-  policy = jsonencode({
-    rules = [{
-      rulePriority = 1
-      description  = "Keep only the last 5 images (stay well under the 500 MB free storage)"
-      selection = {
-        tagStatus   = "any"
-        countType   = "imageCountMoreThan"
-        countNumber = 5
-      }
-      action = { type = "expire" }
-    }]
-  })
-}
-
 resource "aws_cloudwatch_log_group" "app" {
   name              = "/${var.project}/app"
   retention_in_days = 7

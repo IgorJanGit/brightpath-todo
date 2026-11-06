@@ -1,6 +1,6 @@
 #!/bin/bash
 # First-boot setup for the app server (Amazon Linux 2023).
-# It only prepares the box; the first real deploy comes from GitHub Actions.
+# It prepares the box and installs the auto-deploy timer.
 set -euxo pipefail
 
 # The instance boots without a public IP; Terraform attaches the Elastic IP a
@@ -10,7 +10,7 @@ for i in $(seq 1 60); do
   sleep 5
 done
 
-dnf -y install docker git
+dnf -y install docker git jq
 systemctl enable --now docker
 
 # Docker Compose v2 plugin (not packaged for AL2023).
@@ -34,3 +34,7 @@ if [ ! -d /opt/todo/.git ]; then
   git clone "https://github.com/${github_repo}.git" /opt/todo
 fi
 chmod 700 /opt/todo
+
+# Pull-based deploys: a systemd timer checks GitHub every minute and deploys
+# the newest commit on main whose CI passed (first deploy happens right away).
+bash /opt/todo/deploy/install-autodeploy.sh

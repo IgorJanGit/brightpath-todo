@@ -6,4 +6,3 @@ alert_email = "you@example.com"
 # aws_region         = "us-east-2"
 # enable_https       = true
 # monthly_budget_usd = 5
-# create_github_oidc_provider = false   # if your account already has it

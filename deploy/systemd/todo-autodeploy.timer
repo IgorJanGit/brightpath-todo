@@ -1,0 +1,10 @@
+[Unit]
+Description=Check GitHub for a new commit to deploy every minute
+
+[Timer]
+OnBootSec=60s
+OnUnitInactiveSec=60s
+Unit=todo-autodeploy.service
+
+[Install]
+WantedBy=timers.target
