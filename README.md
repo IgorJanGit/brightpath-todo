@@ -6,7 +6,7 @@ A to-do list (Flask + PostgreSQL) running on a Linux EC2 instance, with the data
 |---|---|
 | **Live app** | https://3-131-76-41.sslip.io |
 | **Health check** | https://3-131-76-41.sslip.io/health |
-| **Demo video** | *link* |
+| **Demo video** | https://youtu.be/A_3SpLWUFvM |
 
 ---
 
